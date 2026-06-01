@@ -1,3 +1,5 @@
 conda create -n meranalysis python=3.12
 conda activate meranalysis
 pip install napari[all]
+
+numpy scipy opencv-python matplotlib tqdm pandas networkx torch dask zarr scikit-learn cellpose scanpy napari sdeconv
