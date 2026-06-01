@@ -1,7 +1,8 @@
 [project]
-name = "allenfitting"
+name = "merfit"
 version = "0.1.0"
-description = "Add your description here"
+description = "Basic code for fitting MERFISH+ data"
+authors = [{name="Bogdan Bintu", email="bbintu@health.ucsd.edu"}]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,3 +22,7 @@ dependencies = [
     "tqdm>=4.67.3",
     "zarr>=3.1.6",
 ]
+
+[build-system]
+requires = ["uv-build>=0.9.7"]
+build-backend = "uv_build"
