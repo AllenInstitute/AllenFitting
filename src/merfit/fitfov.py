@@ -3,6 +3,7 @@ import os,pickle
 import matplotlib.pylab as plt
 from tqdm import tqdm
 import torch
+import pathlib
 
 def get_pos(path):
     """Given a .zarr file, get the x,y um positions of the stage"""
@@ -128,16 +129,16 @@ def get_tzxy_plus_minus(obj_Xh_plus,obj_Xh_minus,obj_ref_Xh_plus,obj_ref_Xh_minu
     else:
         tzxyf = -[tzxy_plus,tzxy_minus][np.argmax([N_plus,N_minus])]
     return [tzxyf,tzxy_plus,tzxy_minus,N_plus,N_minus]    
-def get_best_translation_pointsT(fov,htag,htagref,save_folder,save_folder_ref,set_='',resc=5,th=0):
-    fl_feats = rf'{save_folder}\{fov}--{htag}--dapiFeatures.npz'
-    fl_feats_ref = rf'{save_folder_ref}\{fov}--{htagref}--dapiFeatures.npz'
+def get_best_translation_pointsT(fov,htag,htagref,fov_folder,fov_folder_ref,set_='',resc=5,th=0):
+    fl_feats = fov_folder /  f'{fov}--{htag}--dapiFeatures.npz'
+    fl_feats_ref = fov_folder_ref / f'{fov}--{htagref}--dapiFeatures.npz'
     obj_Xh_plus,obj_Xh_minus = np.load(fl_feats)['Xh_plus'],np.load(fl_feats)['Xh_minus']
     obj_ref_Xh_plus,obj_ref_Xh_minus = np.load(fl_feats_ref)['Xh_plus'],np.load(fl_feats_ref)['Xh_minus']
     tzxyf,tzxy_plus,tzxy_minus,N_plus,N_minus = get_tzxy_plus_minus(obj_Xh_plus,obj_Xh_minus,obj_ref_Xh_plus,obj_ref_Xh_minus,resc=resc,th=th)
     return tzxyf,tzxy_plus,tzxy_minus,N_plus,N_minus
 def read_im(fl,return_pos=False,ncols=4):
     import dask.array as da
-    data = os.path.dirname(fl)+os.sep+os.path.basename(fl).split('_')[-1].split('.')[0]+r'\data'
+    data = os.path.dirname(fl) / os.path.basename(fl).split('_')[-1].split('.')[0]+r'\data'
     im = da.from_zarr(fl,component=data)
     im = im[1:]
     im = im.reshape([-1,ncols,im.shape[-2],im.shape[-1]])
@@ -286,7 +287,7 @@ def get_iH(fld): return int(os.path.basename(fld).split('_')[0][1:])
 def get_XH(self,fov,ncols=3,th_h=0,medH_fl=None,color_fl=None):
     
     save_folder = self.save_folder
-    drift_fl = save_folder+os.sep+'driftNew_'+fov+'--.pkl'
+    drift_fl = save_folder / f'driftNew_{fov}--.pkl'
     drifts,all_flds,fov,fl_ref = pickle.load(open(drift_fl,'rb'))
     self.drifts,self.all_flds,self.fov,self.fl_ref = drifts,all_flds,fov,fl_ref
     
@@ -295,7 +296,7 @@ def get_XH(self,fov,ncols=3,th_h=0,medH_fl=None,color_fl=None):
         fld = all_flds[iH]
         for icol in range(ncols):
             tag = os.path.basename(fld)
-            save_fl = save_folder+os.sep+fov.split('.')[0]+'--'+tag+'--col'+str(icol)+'__Xhfits.npz'
+            save_fl = self.fov_folder / f'{fov.split('.')[0]}--{tag}--col{icol}__Xhfits.npz'
             Xh = np.load(save_fl,allow_pickle=True)['Xh']
             ### get drift
             tzxy = drifts[iH][0]
@@ -324,11 +325,11 @@ def get_XH(self,fov,ncols=3,th_h=0,medH_fl=None,color_fl=None):
                     XH_ = np.concatenate([Xh,icolR],axis=-1)
                     XH.extend(XH_)
     self.XH = np.array(XH)
-def finished_fitting(save_folder,fov,htags):
+def finished_fitting(fov_folder,fov,htags):
     is_good = []
     for htag in htags:
-        fl_feats = rf'{save_folder}\{fov}--{htag}--dapiFeatures.npz'
-        is_good.append(os.path.exists(fl_feats))
+        fl_feats  = fov_folder / f"{fov}--{htag}--dapiFeatures.npz"
+        is_good.append(fl_feats.exists())
     return np.all(is_good)
 from scipy.spatial import KDTree
 def set_scoreA(dec):
@@ -406,6 +407,7 @@ def load_library(self,lib_fl = r'Z:\DCBBL1_3_2_2023\MERFISH_Analysis\codebook_0_
                 if bit not in dic_bit_to_code: dic_bit_to_code[bit]=[]
                 dic_bit_to_code[bit].append(icd)
         self.dic_bit_to_code = dic_bit_to_code  ### a dictinary in which each bit is mapped to the inde of a code
+
 def plot_statistics(dec,ngns=20):
     if hasattr(dec,'im_segm_'):
         ncells = len(np.unique(dec.im_segm_))-1
@@ -451,26 +453,32 @@ def plot_multigenes(self,genes=['Gad1','Sox9'],colors=['r','g','b','m','c','y','
 
     return viewer
 
-def main_(fov,save_folder,helper_folder,Nhybes=9,verbose = False):
-    
-    
+def fit(
+    fov_folder:pathlib.Path,
+    save_folder:pathlib.Path,
+    helper_folder:pathlib.Path, 
+    Nhybes:int=9,
+    verbose:bool = False):
+    fov = next(fov_folder.iterdir()).stem.split("--")[0]
     dec = dummy()
+    dec.fov_folder = fov_folder
     dec.save_folder = save_folder
-    dec.decoded_fl = dec.save_folder+os.sep+f'decodedNew_{fov}.npz'
-    if not os.path.exists(dec.decoded_fl):
+    dec.decoded_fl = dec.save_folder / f'decodedNew_{fov}.npz'
+    if not dec.decoded_fl.exists():
         ### compute drift
         
         htags = [rf'H{i+1}_MER_set1' for i in np.arange(Nhybes)]
-        assert finished_fitting(save_folder,fov,htags)
+        if not finished_fitting(fov_folder,fov,htags):
+            raise NameError(f"Cannot find all dapiFeautres files in {fov_folder} based on Nhybes={Nhybes}")
             #time.sleep(10)
         htagref = htags[0]
         ### compute drift for all MERFISH rounds
-        drift_fl = save_folder+os.sep+'driftNew_'+fov+'--.pkl'
+        drift_fl = save_folder / f'driftNew_{fov}--.pkl'
         dec.drift_fl = drift_fl
-        if not os.path.exists(drift_fl):
+        if not dec.drift_fl.exists():
             newdrifts = []
             for htag in htags:
-                drft = get_best_translation_pointsT(fov,htag,htagref,save_folder,save_folder,set_='',resc=5,th=0)
+                drft = get_best_translation_pointsT(fov,htag,htagref,fov_folder,fov_folder ,set_='',resc=5,th=0)
                 if verbose:
                     print(htag,drft)
                 newdrifts.append(drft)
@@ -478,18 +486,18 @@ def main_(fov,save_folder,helper_folder,Nhybes=9,verbose = False):
 
         ### load in fitted data
         get_XH(dec,fov,ncols=3,th_h=0,
-                   color_fl=helper_folder+os.sep+'color_correction.pkl',
-                   medH_fl=helper_folder+os.sep+'medHBRBB.npz')
+                   color_fl=helper_folder / 'color_correction.pkl',
+                   medH_fl=helper_folder / 'medHBRBB.npz')
         
         
         dec.ncols = 3
-        lib_fl = helper_folder+os.sep+r'codebook_BRBB_500Markergn.csv'
+        lib_fl = helper_folder / r'codebook_BRBB_500Markergn.csv'
         load_library(dec,lib_fl)
         get_intersV2(dec,nmin_bits=3,dinstance_th=3)
         get_icodesV3(dec,nmin_bits=3,iH=-3)
         get_score(dec)
         
-        scores_ref_fl = save_folder+os.sep+'scores_BRBB_th3.npy'
+        scores_ref_fl = save_folder / 'scores_BRBB_th3.npy'
         if not os.path.exists(scores_ref_fl):
             score_ref = np.sort(dec.score,axis=0)
             dec.score_ref = score_ref
@@ -524,21 +532,37 @@ def main_(fov,save_folder,helper_folder,Nhybes=9,verbose = False):
         plt.hist(scoreA[(is_good_gn)&kp],density=True,bins=100,alpha=0.5,label='all genes')
         plt.hist(scoreA[(~is_good_gn)&kp],density=True,bins=100,alpha=0.5,label='blanks');
         plt.legend()
+        plt.savefig(save_folder / "histplot.png")
+        plt.close()
     
         dec.th=-1.
         dec.gns_names = np.array(dec.gns_names)
         plot_statistics(dec)
+        plt.savefig(save_folder / "stats.png")
+        plt.close()
     return dec
-def main(fov,save_folder,helper_folder,Nhybes=9,try_mode=False,verbose=False):
+
+def _check_path(path) -> pathlib.Path:
+    """
+    Helper function to check if path is pathlib.Path and convert it if not.
+    """
+    return pathlib.Path(path) if not isinstance(path, pathlib.Path) else path
+
+def main(fov_folder,save_folder,helper_folder,Nhybes=9,try_mode=False,verbose=False):
+    fov_folder = _check_path(fov_folder)
+    save_folder = _check_path(save_folder)
+    helper_folder = _check_path(helper_folder)
+
     if try_mode:
         try:
-            dec = main_(fov,save_folder,helper_folder,Nhybes=Nhybes,try_mode=try_mode,verbose=verbose)
+            dec = fit(fov_folder,save_folder,helper_folder,Nhybes=Nhybes,verbose=verbose)
         except:
             print("Failed:",fov)
             dec = None
     else:
-        dec = main_(fov,save_folder,helper_folder,Nhybes=9,verbose=verbose)
+        dec = fit(fov_folder,save_folder,helper_folder,Nhybes=Nhybes,verbose=verbose)
     return dec
+
 import sys
 if __name__ == "__main__":
     fov = sys.argv[1]
