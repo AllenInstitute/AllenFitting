@@ -456,15 +456,18 @@ def plot_multigenes(self,genes=['Gad1','Sox9'],colors=['r','g','b','m','c','y','
 def fit(
     fov_folder:pathlib.Path,
     save_folder:pathlib.Path,
-    helper_folder:pathlib.Path, 
+    helper_folder:pathlib.Path,
     Nhybes:int=9,
-    verbose:bool = False):
+    verbose:bool = False,
+    use_zarr:bool = True):
     fov = next(fov_folder.iterdir()).stem.split("--")[0]
     dec = dummy()
     dec.fov_folder = fov_folder
     dec.save_folder = save_folder
     dec.decoded_fl = dec.save_folder / f'decodedNew_{fov}.npz'
-    if not dec.decoded_fl.exists():
+    dec.decoded_zarr = pathlib.Path(str(dec.decoded_fl).replace('.npz', '.zarr'))
+    already_done = dec.decoded_zarr.exists() or dec.decoded_fl.exists() if use_zarr else dec.decoded_fl.exists()
+    if not already_done:
         ### compute drift
         
         htags = [rf'H{i+1}_MER_set1' for i in np.arange(Nhybes)]
@@ -509,18 +512,46 @@ def fit(
         scoreA = dec.scoreA
         
         keep = dec.scoreA>-2
-        print("Saving file:",dec.decoded_fl)
-        np.savez_compressed(dec.decoded_fl,XH_pruned=dec.XH_pruned[keep],
-                            icodesN=dec.icodesN[keep],
-                            gns_names = np.array(dec.gns_names),
-                            dist_best=dec.dist_best[keep],
-                           scoreA = dec.scoreA[keep])
+        if use_zarr:
+            import zarr
+            from zarr.codecs import BloscCodec
+            from concurrent.futures import ThreadPoolExecutor
+            print("Saving file:", dec.decoded_zarr)
+            compressor = BloscCodec(cname='lz4', clevel=5, shuffle='bitshuffle')
+            store = zarr.open(str(dec.decoded_zarr), mode='w')
+            arrays = {
+                'XH_pruned': dec.XH_pruned[keep],
+                'icodesN':   dec.icodesN[keep],
+                'dist_best': dec.dist_best[keep],
+                'scoreA':    dec.scoreA[keep],
+            }
+            with ThreadPoolExecutor() as ex:
+                list(ex.map(lambda kv: store.create_array(kv[0], data=kv[1], compressors=[compressor]), arrays.items()))
+            store.attrs['gns_names'] = list(dec.gns_names)
+        else:
+            print("Saving file:", dec.decoded_fl)
+            np.savez_compressed(dec.decoded_fl,
+                                XH_pruned=dec.XH_pruned[keep],
+                                icodesN=dec.icodesN[keep],
+                                gns_names=np.array(dec.gns_names),
+                                dist_best=dec.dist_best[keep],
+                                scoreA=dec.scoreA[keep])
+
+    elif dec.decoded_zarr.exists():
+        import zarr
+        store = zarr.open(str(dec.decoded_zarr), mode='r')
+        dec.XH_pruned = store['XH_pruned'][:]
+        dec.icodesN   = store['icodesN'][:]
+        dec.gns_names = list(store.attrs['gns_names'])
+        dec.dist_best = store['dist_best'][:]
+        dec.scoreA    = store['scoreA'][:]
     else:
         dec.XH_pruned = np.load(dec.decoded_fl)['XH_pruned']
-        dec.icodesN = np.load(dec.decoded_fl)['icodesN']
-        dec.gns_names = np.load(dec.decoded_fl)['gns_names']
+        dec.icodesN   = np.load(dec.decoded_fl)['icodesN']
+        dec.gns_names = list(np.load(dec.decoded_fl)['gns_names'])
         dec.dist_best = np.load(dec.decoded_fl)['dist_best']
-        dec.scoreA = np.load(dec.decoded_fl)['scoreA']
+        dec.scoreA    = np.load(dec.decoded_fl)['scoreA']
+
     if verbose:
         scoreA = dec.scoreA
         bad_inds = [ign for ign,gn in enumerate(dec.gns_names) if 'blank' in gn]
@@ -548,24 +579,24 @@ def _check_path(path) -> pathlib.Path:
     """
     return pathlib.Path(path) if not isinstance(path, pathlib.Path) else path
 
-def main(fov_folder,save_folder,helper_folder,Nhybes=9,try_mode=False,verbose=False):
+def main(fov_folder,save_folder,helper_folder,Nhybes=9,try_mode=False,verbose=False,use_zarr=True):
     fov_folder = _check_path(fov_folder)
     save_folder = _check_path(save_folder)
     helper_folder = _check_path(helper_folder)
 
     if try_mode:
         try:
-            dec = fit(fov_folder,save_folder,helper_folder,Nhybes=Nhybes,verbose=verbose)
+            dec = fit(fov_folder,save_folder,helper_folder,Nhybes=Nhybes,verbose=verbose,use_zarr=use_zarr)
         except:
             print("Failed:",fov)
             dec = None
     else:
-        dec = fit(fov_folder,save_folder,helper_folder,Nhybes=Nhybes,verbose=verbose)
+        dec = fit(fov_folder,save_folder,helper_folder,Nhybes=Nhybes,verbose=verbose,use_zarr=use_zarr)
     return dec
 
-import sys
-if __name__ == "__main__":
-    fov = sys.argv[1]
-    save_folder = sys.argv[2]
-    helper_folder = sys.argv[3]
-    dec = main(fov,save_folder,helper_folder,try_mode=False)
+# import sys
+# if __name__ == "__main__":
+#     fov = sys.argv[1]
+#     save_folder = sys.argv[2]
+#     helper_folder = sys.argv[3]
+#     dec = main(fov,save_folder,helper_folder,try_mode=False)
